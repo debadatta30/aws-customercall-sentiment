@@ -1,0 +1,144 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+    CloudFormation template to create a Lambda function to call the Tital Text G1 
+Parameters:
+  LambdaFunctionName:
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9_-]*'
+    Description: The name of the Lambda function to be deployed
+    Default: Lambda-CallSentiment-Function
+  LambdaRoleName:
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[\w+=,.@-]+'
+    Description: The name of the IAM role used as the Lambda execution role
+    Default: Lambda-Role-CallSentiment
+  LambdaPolicyName:
+    Type: String
+    MinLength: '1'
+    MaxLength: '128'
+    AllowedPattern: '[\w+=,.@-]+'
+    Default: Lambda-Policy-CallSentiment
+  S3BucketName:
+    Type: String
+    MinLength: '3'
+    MaxLength: '255'
+    Description: The name of the bucket to upload callrecording and invoke lambda on upload of file
+    Default: callrecording
+  LambdaBucketName:
+    Type: String
+    MinLength: '3'
+    MaxLength: '255'
+    Description: The name of the bucket lambda code exist
+    Default: lambdacodebucket
+  KeyName:
+    Type: String
+    MinLength: '3'
+    MaxLength: '255'
+    Description: prompt file name
+    Default: prompt.txt
+  BucketName:
+    Type: String
+    MinLength: '3'
+    MaxLength: '255'
+    Description: The name of the bucket where object  need to be download
+    Default: bsourceprompt
+Resources:
+  TranscriptS3:
+    Type: AWS::S3::Bucket
+    DependsOn: BucketInvokePermission
+    Properties:
+      BucketName: !Ref S3BucketName
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: mp3
+            Function: !GetAtt [ LambdaFunction, Arn]
+  BucketInvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: LambdaFunction
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+          - LambdaFunction
+          - Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:s3:::${S3BucketName}
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref LambdaRoleName
+      Description: An execution role for a Lambda function launched by CloudFormation
+      ManagedPolicyArns:
+        - !Ref LambdaPolicy
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonTranscribeFullAccess'
+        - 'arn:aws:iam::aws:policy/CloudWatchFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action:
+          - 'sts:AssumeRole'
+       
+  LambdaPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Ref LambdaPolicyName
+      Description: Managed policy for a Lambda function launched by CloudFormation
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::*'
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: !Join ['',['arn:', !Ref AWS::Partition, ':logs:', !Ref AWS::Region, ':', !Ref AWS::AccountId, ':log-group:/aws/lambda/', !Ref LambdaFunctionName, ':*']]
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['',['/aws/lambda/', !Ref LambdaFunctionName]]
+      RetentionInDays: 30
+            
+  LambdaFunction:
+    DependsOn: LambdaRole
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Lambda function to validate the producer data 
+      FunctionName: !Ref LambdaFunctionName
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Runtime: python3.12
+      Role: !GetAtt 'LambdaRole.Arn'
+      Timeout: 480
+      Environment:
+        Variables:
+          SOURCEBUCKET: !Ref BucketName
+          SOURCEFILE: !Ref KeyName
+      Code:
+        S3Bucket: !Ref LambdaBucketName
+        S3Key: my_deployment_package.zip
+                
+    
